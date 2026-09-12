@@ -250,12 +250,73 @@
                 
                 // Вызываем callback без задержки
                 try {
-                    window.onQRScanned(data);
+                    onQRScanned(data);
                 } catch (e) {
                     console.error('Ошибка в callback:', e);
                     isRequesting = false;
                     scanning = true;
                     statusEl.classList.add('hidden');
+                }
+            }
+            
+            async function onQRScanned(data) {
+                console.log('📤 Отправка данных на webhook:', data);
+                
+                try {
+                    // Отправляем данные на webhook
+                    const response = await fetch('https://n8n.ticketon.kz/webhook/a3bd82c7-1529-466f-888f-eb148fdcce3e', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            qrCode: data,
+                            timestamp: new Date().toISOString()
+                        })
+                    });
+                    
+                    if (response.ok) {
+                        console.log('✅ Webhook вернул 200');
+                        
+                        // Вибрация успеха
+                        if (navigator.vibrate) {
+                            navigator.vibrate([100, 50, 100]);
+                        }
+                        
+                        // Показываем popup с уведомлением
+                        showPopupNotification('✅ QR-код успешно отсканирован!', 'success');
+                        
+                        // Через 2 секунды закрываем камеру и показываем уведомление о перезагрузке
+                        setTimeout(() => {
+                            stopCamera();
+                            showPopupNotification(
+                                'Для сканирования ещё одного QR-кода\nперезагрузите страницу',
+                                'info',
+                                true
+                            );
+                        }, 2000);
+                        
+                    } else {
+                        console.error('❌ Webhook вернул ошибку:', response.status);
+                        isRequesting = false;
+                        scanning = true;
+                        statusEl.classList.add('hidden');
+                        showPopupNotification(
+                            'Ошибка при сканировании\nСтатус: ' + response.status,
+                            'error'
+                        );
+                        rafId = requestAnimationFrame(scanFrameLoop);
+                    }
+                } catch (err) {
+                    console.error('❌ Ошибка отправки:', err);
+                    isRequesting = false;
+                    scanning = true;
+                    statusEl.classList.add('hidden');
+                    showPopupNotification(
+                        'Ошибка подключения\nПроверьте интернет',
+                        'error'
+                    );
+                    rafId = requestAnimationFrame(scanFrameLoop);
                 }
             }
             
@@ -330,118 +391,57 @@
             } else {
                 startCamera();
             }
-        })();
-
-        window.onQRScanned = async (data) => {
-            console.log('📤 Отправка данных на webhook:', data);
             
-            try {
-                // Отправляем данные на webhook
-                const response = await fetch('https://n8n.ticketon.kz/webhook/a3bd82c7-1529-466f-888f-eb148fdcce3e', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        qrCode: data,
-                        timestamp: new Date().toISOString()
-                    })
-                });
-                
-                if (response.ok) {
-                    console.log('✅ Webhook вернул 200');
-                    
-                    // Вибрация успеха
-                    if (navigator.vibrate) {
-                        navigator.vibrate([100, 50, 100]);
-                    }
-                    
-                    // Показываем popup с уведомлением
-                    showPopupNotification('✅ QR-код успешно отсканирован!', 'success');
-                    
-                    // Через 2 секунды закрываем камеру и показываем уведомление о перезагрузке
-                    setTimeout(() => {
-                        stopCamera();
-                        showPopupNotification(
-                            'Для сканирования ещё одного QR-кода\nперезагрузите страницу',
-                            'info',
-                            true
-                        );
-                    }, 2000);
-                    
-                } else {
-                    console.error('❌ Webhook вернул ошибку:', response.status);
-                    isRequesting = false;
-                    scanning = true;
-                    statusEl.classList.add('hidden');
-                    showPopupNotification(
-                        'Ошибка при сканировании\nСтатус: ' + response.status,
-                        'error'
-                    );
-                    rafId = requestAnimationFrame(scanFrameLoop);
+            // Функция для показа popup уведомлений
+            function showPopupNotification(message, type = 'info', isReloadHint = false) {
+                // Создаём popup если его еще нет
+                let popup = document.getElementById('notificationPopup');
+                if (!popup) {
+                    popup = document.createElement('div');
+                    popup.id = 'notificationPopup';
+                    popup.style.cssText = `
+                        position: fixed;
+                        top: 50%;
+                        left: 50%;
+                        transform: translate(-50%, -50%);
+                        background: rgba(0, 0, 0, 0.95);
+                        color: #fff;
+                        padding: 30px;
+                        border-radius: 12px;
+                        text-align: center;
+                        font-size: 16px;
+                        z-index: 10000;
+                        border: 2px solid;
+                        max-width: 80%;
+                        line-height: 1.5;
+                        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
+                    `;
+                    document.body.appendChild(popup);
                 }
-            } catch (err) {
-                console.error('❌ Ошибка отправки:', err);
-                isRequesting = false;
-                scanning = true;
-                statusEl.classList.add('hidden');
-                showPopupNotification(
-                    'Ошибка подключения\nПроверьте интернет',
-                    'error'
-                );
-                rafId = requestAnimationFrame(scanFrameLoop);
+                
+                // Устанавливаем цвет в зависимости от типа
+                if (type === 'success') {
+                    popup.style.borderColor = '#00ff88';
+                    popup.style.color = '#00ff88';
+                } else if (type === 'error') {
+                    popup.style.borderColor = '#ff4444';
+                    popup.style.color = '#ff4444';
+                } else {
+                    popup.style.borderColor = '#00a8ff';
+                    popup.style.color = '#00a8ff';
+                }
+                
+                popup.textContent = message;
+                popup.style.display = 'block';
+                
+                // Если это подсказка о перезагрузке, не закрываем автоматически
+                if (!isReloadHint) {
+                    setTimeout(() => {
+                        popup.style.display = 'none';
+                    }, 3000);
+                }
             }
-        };
-        
-        // Функция для показа popup уведомлений
-        function showPopupNotification(message, type = 'info', isReloadHint = false) {
-            // Создаём popup если его еще нет
-            let popup = document.getElementById('notificationPopup');
-            if (!popup) {
-                popup = document.createElement('div');
-                popup.id = 'notificationPopup';
-                popup.style.cssText = `
-                    position: fixed;
-                    top: 50%;
-                    left: 50%;
-                    transform: translate(-50%, -50%);
-                    background: rgba(0, 0, 0, 0.95);
-                    color: #fff;
-                    padding: 30px;
-                    border-radius: 12px;
-                    text-align: center;
-                    font-size: 16px;
-                    z-index: 10000;
-                    border: 2px solid;
-                    max-width: 80%;
-                    line-height: 1.5;
-                    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
-                `;
-                document.body.appendChild(popup);
-            }
-            
-            // Устанавливаем цвет в зависимости от типа
-            if (type === 'success') {
-                popup.style.borderColor = '#00ff88';
-                popup.style.color = '#00ff88';
-            } else if (type === 'error') {
-                popup.style.borderColor = '#ff4444';
-                popup.style.color = '#ff4444';
-            } else {
-                popup.style.borderColor = '#00a8ff';
-                popup.style.color = '#00a8ff';
-            }
-            
-            popup.textContent = message;
-            popup.style.display = 'block';
-            
-            // Если это подсказка о перезагрузке, не закрываем автоматически
-            if (!isReloadHint) {
-                setTimeout(() => {
-                    popup.style.display = 'none';
-                }, 3000);
-            }
-        }
+        })();
     </script>
 </body>
 </html>
