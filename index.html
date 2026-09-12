@@ -179,7 +179,7 @@
             let stream = null;
             let scanning = false;
             let rafId = null;
-            let stopped = false;
+            let isRequesting = false;
             
             function showError(message) {
                 errorEl.textContent = message;
@@ -208,7 +208,7 @@
             }
             
             function scanFrameLoop() {
-                if (!scanning || stopped) return;
+                if (!scanning || isRequesting) return;
                 
                 if (video.readyState === video.HAVE_ENOUGH_DATA) {
                     canvas.width = video.videoWidth;
@@ -237,28 +237,26 @@
             }
             
             function handleQRFound(data) {
-                if (stopped) return;
-                stopped = true;
+                if (isRequesting) return;
+                isRequesting = true;
                 scanning = false;
                 
-                showStatus('✅ QR-код распознан');
+                showStatus('⏳ Обработка QR-кода...');
                 
                 // Вибрация (если поддерживается)
                 if (navigator.vibrate) {
                     navigator.vibrate(200);
                 }
                 
-                // Останавливаем камеру
-                stopCamera();
-                
-                // Небольшая задержка для UX, потом callback
-                setTimeout(function() {
-                    try {
-                        window.onQRScanned(data);
-                    } catch (e) {
-                        console.error('Ошибка в callback:', e);
-                    }
-                }, 300);
+                // Вызываем callback без задержки
+                try {
+                    window.onQRScanned(data);
+                } catch (e) {
+                    console.error('Ошибка в callback:', e);
+                    isRequesting = false;
+                    scanning = true;
+                    statusEl.classList.add('hidden');
+                }
             }
             
             async function startCamera() {
@@ -361,8 +359,9 @@
                     // Показываем popup с уведомлением
                     showPopupNotification('✅ QR-код успешно отсканирован!', 'success');
                     
-                    // Через 2 секунды показываем уведомление о перезагрузке
+                    // Через 2 секунды закрываем камеру и показываем уведомление о перезагрузке
                     setTimeout(() => {
+                        stopCamera();
                         showPopupNotification(
                             'Для сканирования ещё одного QR-кода\nперезагрузите страницу',
                             'info',
@@ -372,17 +371,25 @@
                     
                 } else {
                     console.error('❌ Webhook вернул ошибку:', response.status);
+                    isRequesting = false;
+                    scanning = true;
+                    statusEl.classList.add('hidden');
                     showPopupNotification(
                         'Ошибка при сканировании\nСтатус: ' + response.status,
                         'error'
                     );
+                    rafId = requestAnimationFrame(scanFrameLoop);
                 }
             } catch (err) {
                 console.error('❌ Ошибка отправки:', err);
+                isRequesting = false;
+                scanning = true;
+                statusEl.classList.add('hidden');
                 showPopupNotification(
                     'Ошибка подключения\nПроверьте интернет',
                     'error'
                 );
+                rafId = requestAnimationFrame(scanFrameLoop);
             }
         };
         
