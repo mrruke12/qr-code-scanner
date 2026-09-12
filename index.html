@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QR Scanner</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #000;
+            color: #fff;
+            overflow: hidden;
+            height: 100vh;
+        }
+        
+        #video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        
+        #canvas {
+            display: none;
+        }
+        
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            pointer-events: none;
+        }
+        
+        .scan-frame {
+            width: 250px;
+            height: 250px;
+            border: 3px solid #00ff88;
+            border-radius: 12px;
+            position: relative;
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
+            animation: pulse 2s infinite;
+        }
+        
+        .scan-frame::before,
+        .scan-frame::after {
+            content: '';
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            border: 4px solid #00ff88;
+        }
+        
+        .scan-frame::before {
+            top: -4px;
+            left: -4px;
+            border-right: none;
+            border-bottom: none;
+            border-radius: 12px 0 0 0;
+        }
+        
+        .scan-frame::after {
+            bottom: -4px;
+            right: -4px;
+            border-left: none;
+            border-top: none;
+            border-radius: 0 0 12px 0;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.02); }
+        }
+        
+        .hint {
+            position: absolute;
+            bottom: 80px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            font-size: 16px;
+            color: #fff;
+            text-shadow: 0 2px 8px rgba(0,0,0,0.8);
+            padding: 0 20px;
+        }
+        
+        .status {
+            position: absolute;
+            top: 40px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            font-size: 14px;
+            color: #00ff88;
+            text-shadow: 0 2px 8px rgba(0,0,0,0.8);
+        }
+        
+        .error {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(255, 0, 0, 0.9);
+            padding: 20px 30px;
+            border-radius: 12px;
+            max-width: 90%;
+            text-align: center;
+            font-size: 16px;
+            pointer-events: auto;
+        }
+        
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+    <video id="video" playsinline autoplay muted></video>
+    <canvas id="canvas"></canvas>
+    
+    <div class="overlay">
+        <div class="scan-frame" id="scanFrame"></div>
+        <div class="hint" id="hint">Наведите камеру на QR-код</div>
+    </div>
+    
+    <div class="status hidden" id="status"></div>
+    <div class="error hidden" id="error"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    <script>
+        (function() {
+            'use strict';
+            
+            // ============================================================
+            // КАСТОМНЫЙ CALLBACK — измените под свои нужды
+            // ============================================================
+            window.onQRScanned = function(qrData) {
+                console.log('✅ QR отсканирован:', qrData);
+                
+                // Пример: проброс в Android WebView через интерфейс
+                if (window.AndroidBridge && typeof window.AndroidBridge.onQRResult === 'function') {
+                    window.AndroidBridge.onQRResult(qrData);
+                    return;
+                }
+                
+                // Пример: проброс через postMessage в React Native WebView
+                if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+                    window.ReactNativeWebView.postMessage(JSON.stringify({
+                        type: 'QR_SCANNED',
+                        data: qrData
+                    }));
+                    return;
+                }
+                
+                // Fallback: показать alert
+                alert('QR-код: ' + qrData);
+            };
+            // ============================================================
+            
+            const video = document.getElementById('video');
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            const statusEl = document.getElementById('status');
+            const errorEl = document.getElementById('error');
+            const hintEl = document.getElementById('hint');
+            const scanFrame = document.getElementById('scanFrame');
+            
+            let stream = null;
+            let scanning = false;
+            let rafId = null;
+            let stopped = false;
+            
+            function showError(message) {
+                errorEl.textContent = message;
+                errorEl.classList.remove('hidden');
+                hintEl.classList.add('hidden');
+                scanFrame.classList.add('hidden');
+            }
+            
+            function showStatus(message) {
+                statusEl.textContent = message;
+                statusEl.classList.remove('hidden');
+            }
+            
+            function stopCamera() {
+                if (rafId) {
+                    cancelAnimationFrame(rafId);
+                    rafId = null;
+                }
+                if (stream) {
+                    stream.getTracks().forEach(function(track) {
+                        track.stop();
+                    });
+                    stream = null;
+                }
+                scanning = false;
+            }
+            
+            function scanFrameLoop() {
+                if (!scanning || stopped) return;
+                
+                if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    
+                    if (canvas.width > 0 && canvas.height > 0) {
+                        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                        
+                        try {
+                            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                            const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                                inversionAttempts: 'dontInvert'
+                            });
+                            
+                            if (code && code.data) {
+                                handleQRFound(code.data);
+                                return;
+                            }
+                        } catch (e) {
+                            console.warn('Ошибка сканирования:', e);
+                        }
+                    }
+                }
+                
+                rafId = requestAnimationFrame(scanFrameLoop);
+            }
+            
+            function handleQRFound(data) {
+                if (stopped) return;
+                stopped = true;
+                scanning = false;
+                
+                showStatus('✅ QR-код распознан');
+                
+                // Вибрация (если поддерживается)
+                if (navigator.vibrate) {
+                    navigator.vibrate(200);
+                }
+                
+                // Останавливаем камеру
+                stopCamera();
+                
+                // Небольшая задержка для UX, потом callback
+                setTimeout(function() {
+                    try {
+                        window.onQRScanned(data);
+                    } catch (e) {
+                        console.error('Ошибка в callback:', e);
+                    }
+                }, 300);
+            }
+            
+            async function startCamera() {
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    showError('Ваш браузер не поддерживает доступ к камере');
+                    return;
+                }
+                
+                if (typeof jsQR === 'undefined') {
+                    showError('Не удалось загрузить библиотеку сканирования');
+                    return;
+                }
+                
+                try {
+                    showStatus('Запрос доступа к камере...');
+                    
+                    stream = await navigator.mediaDevices.getUserMedia({
+                        video: {
+                            facingMode: { ideal: 'environment' },
+                            width: { ideal: 1280 },
+                            height: { ideal: 720 }
+                        },
+                        audio: false
+                    });
+                    
+                    video.srcObject = stream;
+                    video.setAttribute('playsinline', 'true');
+                    
+                    await video.play();
+                    
+                    statusEl.classList.add('hidden');
+                    scanning = true;
+                    rafId = requestAnimationFrame(scanFrameLoop);
+                    
+                } catch (err) {
+                    console.error('Ошибка доступа к камере:', err);
+                    
+                    let message = 'Не удалось получить доступ к камере';
+                    
+                    if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                        message = 'Доступ к камере запрещён. Разрешите доступ в настройках браузера.';
+                    } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+                        message = 'Камера не найдена на устройстве.';
+                    } else if (err.name === 'NotReadableError') {
+                        message = 'Камера занята другим приложением.';
+                    } else if (err.name === 'OverconstrainedError') {
+                        message = 'Камера не поддерживает требуемые параметры.';
+                    } else if (err.message) {
+                        message = err.message;
+                    }
+                    
+                    showError(message);
+                }
+            }
+            
+            // Освобождаем ресурсы при уходе со страницы
+            window.addEventListener('pagehide', stopCamera);
+            window.addEventListener('beforeunload', stopCamera);
+            document.addEventListener('visibilitychange', function() {
+                if (document.hidden && stream) {
+                    // Пауза при скрытии, чтобы не жрать батарею
+                    stream.getVideoTracks().forEach(function(t) { t.enabled = false; });
+                } else if (!document.hidden && stream) {
+                    stream.getVideoTracks().forEach(function(t) { t.enabled = true; });
+                }
+            });
+            
+            // Запуск после загрузки страницы
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', startCamera);
+            } else {
+                startCamera();
+            }
+        })();
+
+        window.onQRScanned = (data) => {
+            alert(data)
+        }
+    </script>
+</body>
+</html>
