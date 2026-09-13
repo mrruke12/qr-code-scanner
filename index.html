@@ -46,15 +46,17 @@
         }
         
         .scan-frame {
-            width: 250px;
-            height: 250px;
+            width: min(78vw, 320px);
+            height: min(78vw, 320px);
             border: 3px solid #00ff88;
             border-radius: 12px;
             position: relative;
             box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
             animation: pulse 2s infinite;
+            overflow: hidden;
+            transition: border-color 0.2s ease;
         }
-        
+
         .scan-frame::before,
         .scan-frame::after {
             content: '';
@@ -62,8 +64,9 @@
             width: 30px;
             height: 30px;
             border: 4px solid #00ff88;
+            z-index: 1;
         }
-        
+
         .scan-frame::before {
             top: -4px;
             left: -4px;
@@ -71,7 +74,7 @@
             border-bottom: none;
             border-radius: 12px 0 0 0;
         }
-        
+
         .scan-frame::after {
             bottom: -4px;
             right: -4px;
@@ -79,7 +82,30 @@
             border-top: none;
             border-radius: 0 0 12px 0;
         }
-        
+
+        .scan-frame.found {
+            border-color: #00ff88;
+            animation: none;
+            box-shadow: 0 0 0 9999px rgba(0, 255, 136, 0.15);
+        }
+
+        .scan-line {
+            position: absolute;
+            left: 4%;
+            right: 4%;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #00ff88, transparent);
+            box-shadow: 0 0 8px 1px rgba(0, 255, 136, 0.8);
+            animation: scanline 2.2s ease-in-out infinite;
+        }
+
+        @keyframes scanline {
+            0% { top: 4%; opacity: 0; }
+            10% { opacity: 1; }
+            90% { opacity: 1; }
+            100% { top: 96%; opacity: 0; }
+        }
+
         @keyframes pulse {
             0%, 100% { transform: scale(1); }
             50% { transform: scale(1.02); }
@@ -87,16 +113,24 @@
         
         .hint {
             position: absolute;
-            bottom: 80px;
+            bottom: 100px;
             left: 0;
             right: 0;
             text-align: center;
-            font-size: 16px;
+            font-size: 15px;
             color: #fff;
             text-shadow: 0 2px 8px rgba(0,0,0,0.8);
             padding: 0 20px;
+            transition: opacity 0.2s ease;
         }
-        
+
+        .hint .sub {
+            display: block;
+            margin-top: 4px;
+            font-size: 13px;
+            color: rgba(255,255,255,0.7);
+        }
+
         .status {
             position: absolute;
             top: 40px;
@@ -106,6 +140,68 @@
             font-size: 14px;
             color: #00ff88;
             text-shadow: 0 2px 8px rgba(0,0,0,0.8);
+        }
+
+        .controls {
+            position: absolute;
+            bottom: 24px;
+            left: 0;
+            right: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            pointer-events: none;
+        }
+
+        .zoom-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: min(80vw, 320px);
+            pointer-events: auto;
+        }
+
+        .zoom-row input[type="range"] {
+            flex: 1;
+            accent-color: #00ff88;
+            height: 4px;
+        }
+
+        .zoom-label {
+            font-size: 12px;
+            color: #fff;
+            min-width: 34px;
+            text-align: center;
+            text-shadow: 0 1px 4px rgba(0,0,0,0.8);
+        }
+
+        .icon-btn {
+            width: 46px;
+            height: 46px;
+            border-radius: 50%;
+            border: 1px solid rgba(255,255,255,0.4);
+            background: rgba(0,0,0,0.45);
+            color: #fff;
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: auto;
+            backdrop-filter: blur(4px);
+        }
+
+        .icon-btn.active {
+            background: #00ff88;
+            color: #000;
+            border-color: #00ff88;
+        }
+
+        .top-controls {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            pointer-events: auto;
         }
         
         .error {
@@ -132,10 +228,23 @@
     <canvas id="canvas"></canvas>
     
     <div class="overlay">
-        <div class="scan-frame" id="scanFrame"></div>
-        <div class="hint" id="hint">Наведите камеру на QR-код</div>
+        <div class="scan-frame" id="scanFrame">
+            <div class="scan-line"></div>
+        </div>
+        <div class="hint" id="hint">Наведите камеру на QR-код<span class="sub">Если код далеко — используйте зум</span></div>
     </div>
-    
+
+    <div class="top-controls">
+        <button type="button" class="icon-btn hidden" id="torchBtn" aria-label="Фонарик">🔦</button>
+    </div>
+
+    <div class="controls">
+        <div class="zoom-row hidden" id="zoomRow">
+            <span class="zoom-label" id="zoomLabel">1.0×</span>
+            <input type="range" id="zoomSlider" min="1" max="1" step="0.1" value="1">
+        </div>
+    </div>
+
     <div class="status hidden" id="status"></div>
     <div class="error hidden" id="error"></div>
 
@@ -175,11 +284,17 @@
             const errorEl = document.getElementById('error');
             const hintEl = document.getElementById('hint');
             const scanFrame = document.getElementById('scanFrame');
-            
+            const zoomRow = document.getElementById('zoomRow');
+            const zoomSlider = document.getElementById('zoomSlider');
+            const zoomLabel = document.getElementById('zoomLabel');
+            const torchBtn = document.getElementById('torchBtn');
+
             let stream = null;
             let scanning = false;
             let rafId = null;
             let isRequesting = false;
+            let videoTrack = null;
+            let torchOn = false;
             
             function showError(message) {
                 errorEl.textContent = message;
@@ -240,9 +355,10 @@
                 if (isRequesting) return;
                 isRequesting = true;
                 scanning = false;
-                
+
+                scanFrame.classList.add('found');
                 showStatus('⏳ Обработка QR-кода...');
-                
+
                 // Вибрация (если поддерживается)
                 if (navigator.vibrate) {
                     navigator.vibrate(200);
@@ -255,6 +371,7 @@
                     console.error('Ошибка в callback:', e);
                     isRequesting = false;
                     scanning = true;
+                    scanFrame.classList.remove('found');
                     statusEl.classList.add('hidden');
                 }
             }
@@ -311,6 +428,7 @@
                     console.error('❌ Ошибка отправки:', err);
                     isRequesting = false;
                     scanning = true;
+                    scanFrame.classList.remove('found');
                     statusEl.classList.add('hidden');
                     showPopupNotification(
                         'Ошибка подключения\nПроверьте интернет',
@@ -333,25 +451,28 @@
                 
                 try {
                     showStatus('Запрос доступа к камере...');
-                    
+
                     stream = await navigator.mediaDevices.getUserMedia({
                         video: {
                             facingMode: { ideal: 'environment' },
-                            width: { ideal: 1280 },
-                            height: { ideal: 720 }
+                            width: { ideal: 1920 },
+                            height: { ideal: 1080 },
+                            advanced: [{ focusMode: 'continuous' }]
                         },
                         audio: false
                     });
-                    
+
                     video.srcObject = stream;
                     video.setAttribute('playsinline', 'true');
-                    
+
                     await video.play();
-                    
+
                     statusEl.classList.add('hidden');
                     scanning = true;
                     rafId = requestAnimationFrame(scanFrameLoop);
-                    
+
+                    setupTrackControls();
+
                 } catch (err) {
                     console.error('Ошибка доступа к камере:', err);
                     
@@ -372,7 +493,82 @@
                     showError(message);
                 }
             }
-            
+
+            function setupTrackControls() {
+                videoTrack = stream.getVideoTracks()[0];
+                if (!videoTrack || typeof videoTrack.getCapabilities !== 'function') return;
+
+                let capabilities;
+                try {
+                    capabilities = videoTrack.getCapabilities();
+                } catch (e) {
+                    return;
+                }
+
+                // Пытаемся включить непрерывный автофокус, если это не удалось при запросе камеры
+                if (capabilities.focusMode && capabilities.focusMode.includes('continuous')) {
+                    videoTrack.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(function() {});
+                }
+
+                // Зум: показываем слайдер, если камера поддерживает аппаратный/цифровой зум
+                if (capabilities.zoom && capabilities.zoom.max > capabilities.zoom.min) {
+                    zoomSlider.min = capabilities.zoom.min;
+                    zoomSlider.max = capabilities.zoom.max;
+                    zoomSlider.step = capabilities.zoom.step || 0.1;
+                    zoomSlider.value = capabilities.zoom.min;
+                    zoomLabel.textContent = Number(capabilities.zoom.min).toFixed(1) + '×';
+                    zoomRow.classList.remove('hidden');
+
+                    zoomSlider.addEventListener('input', function() {
+                        const value = parseFloat(zoomSlider.value);
+                        zoomLabel.textContent = value.toFixed(1) + '×';
+                        videoTrack.applyConstraints({ advanced: [{ zoom: value }] }).catch(function() {});
+                    });
+
+                    setupPinchZoom(capabilities.zoom);
+                }
+
+                // Фонарик для тёмных помещений
+                if (capabilities.torch) {
+                    torchBtn.classList.remove('hidden');
+                    torchBtn.addEventListener('click', function() {
+                        torchOn = !torchOn;
+                        videoTrack.applyConstraints({ advanced: [{ torch: torchOn }] }).catch(function() {});
+                        torchBtn.classList.toggle('active', torchOn);
+                    });
+                }
+            }
+
+            function setupPinchZoom(zoomCaps) {
+                let startDistance = 0;
+                let startZoom = parseFloat(zoomSlider.value);
+
+                function getDistance(touches) {
+                    const dx = touches[0].clientX - touches[1].clientX;
+                    const dy = touches[0].clientY - touches[1].clientY;
+                    return Math.sqrt(dx * dx + dy * dy);
+                }
+
+                video.addEventListener('touchstart', function(e) {
+                    if (e.touches.length === 2) {
+                        startDistance = getDistance(e.touches);
+                        startZoom = parseFloat(zoomSlider.value);
+                    }
+                }, { passive: true });
+
+                video.addEventListener('touchmove', function(e) {
+                    if (e.touches.length === 2 && startDistance > 0) {
+                        e.preventDefault();
+                        const scale = getDistance(e.touches) / startDistance;
+                        let value = startZoom * scale;
+                        value = Math.min(zoomCaps.max, Math.max(zoomCaps.min, value));
+                        zoomSlider.value = value;
+                        zoomLabel.textContent = value.toFixed(1) + '×';
+                        videoTrack.applyConstraints({ advanced: [{ zoom: value }] }).catch(function() {});
+                    }
+                }, { passive: false });
+            }
+
             // Освобождаем ресурсы при уходе со страницы
             window.addEventListener('pagehide', stopCamera);
             window.addEventListener('beforeunload', stopCamera);
