@@ -307,9 +307,15 @@
             let stream = null;
             let scanning = false;
             let rafId = null;
-            let isRequesting = false;
             let videoTrack = null;
             let torchOn = false;
+
+            // Сканирование идёт непрерывно, даже пока предыдущие запросы ещё в обработке.
+            // Дедупликация нужна только чтобы не заспамить сервер одним и тем же кодом,
+            // пока он не убран из кадра — разные коды всегда обрабатываются сразу и параллельно.
+            const pendingCodes = new Set();
+            const recentCodes = new Map();
+            const RESCAN_COOLDOWN_MS = 3000;
             
             function showError(message) {
                 errorEl.textContent = message;
@@ -388,7 +394,7 @@
             }
 
             function scanFrameLoop() {
-                if (!scanning || isRequesting) return;
+                if (!scanning) return;
 
                 if (video.readyState === video.HAVE_ENOUGH_DATA) {
                     if (scanRegionDirty) {
@@ -420,7 +426,6 @@
 
                             if (code && code.data) {
                                 handleQRFound(code.data);
-                                return;
                             }
                         } catch (e) {
                             console.warn('Ошибка сканирования:', e);
@@ -432,33 +437,33 @@
             }
             
             function handleQRFound(data) {
-                if (isRequesting) return;
-                isRequesting = true;
-                scanning = false;
+                if (pendingCodes.has(data)) return;
 
+                const lastAttempt = recentCodes.get(data);
+                if (lastAttempt && Date.now() - lastAttempt < RESCAN_COOLDOWN_MS) return;
+
+                pendingCodes.add(data);
                 scanFrame.classList.add('found');
-                showStatus('⏳ Обработка QR-кода...');
 
                 // Вибрация (если поддерживается)
                 if (navigator.vibrate) {
                     navigator.vibrate(200);
                 }
-                
-                // Вызываем callback без задержки
-                try {
-                    onQRScanned(data);
-                } catch (e) {
-                    console.error('Ошибка в callback:', e);
-                    isRequesting = false;
-                    scanning = true;
-                    scanFrame.classList.remove('found');
-                    statusEl.classList.add('hidden');
-                }
+
+                // Запрос уходит сразу же; сканирование продолжается, не дожидаясь ответа —
+                // это позволяет параллельно обрабатывать разные QR-коды в реальном времени.
+                onQRScanned(data).finally(() => {
+                    pendingCodes.delete(data);
+                    recentCodes.set(data, Date.now());
+                    if (pendingCodes.size === 0) {
+                        scanFrame.classList.remove('found');
+                    }
+                });
             }
-            
+
             async function onQRScanned(data) {
                 console.log('📤 Отправка данных на webhook:', data);
-                
+
                 try {
                     // Отправляем данные на webhook
                     const response = await fetch('https://n8n.ticketon.kz/webhook/a3bd82c7-1529-466f-888f-eb148fdcce3e', {
@@ -471,7 +476,7 @@
                             timestamp: new Date().toISOString()
                         })
                     });
-                    
+
                     if (response.ok) {
                         console.log('✅ Webhook вернул 200');
 
@@ -507,34 +512,19 @@
                         const type = failed.length && !succeed.length ? 'error' : 'success';
                         showPopupNotification(lines.join('\n'), type);
 
-                        isRequesting = false;
-                        scanning = true;
-                        scanFrame.classList.remove('found');
-                        statusEl.classList.add('hidden');
-                        rafId = requestAnimationFrame(scanFrameLoop);
-
                     } else {
                         console.error('❌ Webhook вернул ошибку:', response.status);
-                        isRequesting = false;
-                        scanning = true;
-                        statusEl.classList.add('hidden');
                         showPopupNotification(
                             'Ошибка при сканировании\nСтатус: ' + response.status,
                             'error'
                         );
-                        rafId = requestAnimationFrame(scanFrameLoop);
                     }
                 } catch (err) {
                     console.error('❌ Ошибка отправки:', err);
-                    isRequesting = false;
-                    scanning = true;
-                    scanFrame.classList.remove('found');
-                    statusEl.classList.add('hidden');
                     showPopupNotification(
                         'Ошибка подключения\nПроверьте интернет',
                         'error'
                     );
-                    rafId = requestAnimationFrame(scanFrameLoop);
                 }
             }
             
