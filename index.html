@@ -412,25 +412,45 @@
                     
                     if (response.ok) {
                         console.log('✅ Webhook вернул 200');
-                        
+
+                        let result = null;
+                        try {
+                            result = await response.json();
+                        } catch (e) {
+                            console.warn('Не удалось разобрать ответ сервера:', e);
+                        }
+
+                        const succeed = Array.isArray(result && result.succeed) ? result.succeed : [];
+                        const failed = Array.isArray(result && result.failed) ? result.failed : [];
+
                         // Вибрация успеха
                         if (navigator.vibrate) {
                             navigator.vibrate([100, 50, 100]);
                         }
-                        
-                        // Показываем popup с уведомлением
-                        showPopupNotification('✅ QR-код успешно отсканирован!', 'success');
-                        
-                        // Через 2 секунды закрываем камеру и показываем уведомление о перезагрузке
-                        setTimeout(() => {
-                            stopCamera();
-                            showPopupNotification(
-                                'Для сканирования ещё одного QR-кода\nперезагрузите страницу',
-                                'info',
-                                true
-                            );
-                        }, 2000);
-                        
+
+                        const lines = [];
+                        if (succeed.length) {
+                            lines.push('✅ Отсканировано:');
+                            succeed.forEach(name => lines.push(name));
+                        }
+                        if (failed.length) {
+                            if (lines.length) lines.push('');
+                            lines.push('❌ Не отсканировано:');
+                            failed.forEach(name => lines.push(name));
+                        }
+                        if (!lines.length) {
+                            lines.push('✅ QR-код успешно отсканирован!');
+                        }
+
+                        const type = failed.length && !succeed.length ? 'error' : 'success';
+                        showPopupNotification(lines.join('\n'), type);
+
+                        isRequesting = false;
+                        scanning = true;
+                        scanFrame.classList.remove('found');
+                        statusEl.classList.add('hidden');
+                        rafId = requestAnimationFrame(scanFrameLoop);
+
                     } else {
                         console.error('❌ Webhook вернул ошибку:', response.status);
                         isRequesting = false;
@@ -607,7 +627,9 @@
             }
             
             // Функция для показа popup уведомлений
-            function showPopupNotification(message, type = 'info', isReloadHint = false) {
+            let popupHideTimer = null;
+
+            function showPopupNotification(message, type = 'info') {
                 // Создаём popup если его еще нет
                 let popup = document.getElementById('notificationPopup');
                 if (!popup) {
@@ -627,12 +649,15 @@
                         z-index: 10000;
                         border: 2px solid;
                         max-width: 80%;
+                        max-height: 70vh;
+                        overflow-y: auto;
                         line-height: 1.5;
+                        white-space: pre-line;
                         box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
                     `;
                     document.body.appendChild(popup);
                 }
-                
+
                 // Устанавливаем цвет в зависимости от типа
                 if (type === 'success') {
                     popup.style.borderColor = '#00ff88';
@@ -644,16 +669,18 @@
                     popup.style.borderColor = '#00a8ff';
                     popup.style.color = '#00a8ff';
                 }
-                
+
                 popup.textContent = message;
                 popup.style.display = 'block';
-                
-                // Если это подсказка о перезагрузке, не закрываем автоматически
-                if (!isReloadHint) {
-                    setTimeout(() => {
-                        popup.style.display = 'none';
-                    }, 3000);
+
+                // Плашка показывается 10 секунд либо до следующего ответа сервера
+                if (popupHideTimer) {
+                    clearTimeout(popupHideTimer);
                 }
+                popupHideTimer = setTimeout(() => {
+                    popup.style.display = 'none';
+                    popupHideTimer = null;
+                }, 10000);
             }
         })();
 
