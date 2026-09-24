@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
@@ -340,22 +340,87 @@
                 scanning = false;
             }
             
+            // Область сканирования в пикселях видео, соответствующая зелёной рамке на экране.
+            // Пересчитывается при изменении размера окна/поворота экрана.
+            let scanRegion = null;
+            let scanRegionDirty = true;
+
+            function invalidateScanRegion() {
+                scanRegionDirty = true;
+            }
+
+            function computeScanRegion() {
+                const vw = video.videoWidth;
+                const vh = video.videoHeight;
+                if (!vw || !vh) return null;
+
+                const iw = window.innerWidth;
+                const ih = window.innerHeight;
+
+                // video рендерится с object-fit: cover на весь экран
+                const scale = Math.max(iw / vw, ih / vh);
+                const offsetX = (iw - vw * scale) / 2;
+                const offsetY = (ih - vh * scale) / 2;
+
+                const rect = scanFrame.getBoundingClientRect();
+                if (!rect.width || !rect.height) return null;
+
+                // Небольшой запас вокруг рамки, чтобы не обрезать код на самой границе
+                const padding = 0.15;
+                const padX = rect.width * padding;
+                const padY = rect.height * padding;
+
+                let x = (rect.left - padX - offsetX) / scale;
+                let y = (rect.top - padY - offsetY) / scale;
+                let w = (rect.width + padX * 2) / scale;
+                let h = (rect.height + padY * 2) / scale;
+
+                x = Math.max(0, x);
+                y = Math.max(0, y);
+                w = Math.min(vw - x, w);
+                h = Math.min(vh - y, h);
+
+                if (w <= 0 || h <= 0) return null;
+
+                return {
+                    x: Math.floor(x),
+                    y: Math.floor(y),
+                    w: Math.floor(w),
+                    h: Math.floor(h)
+                };
+            }
+
             function scanFrameLoop() {
                 if (!scanning || isRequesting) return;
-                
+
                 if (video.readyState === video.HAVE_ENOUGH_DATA) {
-                    canvas.width = video.videoWidth;
-                    canvas.height = video.videoHeight;
-                    
-                    if (canvas.width > 0 && canvas.height > 0) {
-                        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                        
+                    if (scanRegionDirty) {
+                        scanRegion = computeScanRegion();
+                        scanRegionDirty = false;
+                    }
+
+                    const region = scanRegion || {
+                        x: 0, y: 0, w: video.videoWidth, h: video.videoHeight
+                    };
+
+                    if (region.w > 0 && region.h > 0) {
+                        if (canvas.width !== region.w || canvas.height !== region.h) {
+                            canvas.width = region.w;
+                            canvas.height = region.h;
+                        }
+
+                        ctx.drawImage(
+                            video,
+                            region.x, region.y, region.w, region.h,
+                            0, 0, region.w, region.h
+                        );
+
                         try {
                             const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                             const code = jsQR(imageData.data, imageData.width, imageData.height, {
-                                inversionAttempts: 'dontInvert'
+                                inversionAttempts: 'attemptBoth'
                             });
-                            
+
                             if (code && code.data) {
                                 handleQRFound(code.data);
                                 return;
@@ -365,7 +430,7 @@
                         }
                     }
                 }
-                
+
                 rafId = requestAnimationFrame(scanFrameLoop);
             }
             
@@ -506,6 +571,7 @@
                     await video.play();
 
                     statusEl.classList.add('hidden');
+                    invalidateScanRegion();
                     scanning = true;
                     rafId = requestAnimationFrame(scanFrameLoop);
 
@@ -610,6 +676,8 @@
             // Освобождаем ресурсы при уходе со страницы
             window.addEventListener('pagehide', stopCamera);
             window.addEventListener('beforeunload', stopCamera);
+            window.addEventListener('resize', invalidateScanRegion);
+            window.addEventListener('orientationchange', invalidateScanRegion);
             document.addEventListener('visibilitychange', function() {
                 if (document.hidden && stream) {
                     // Пауза при скрытии, чтобы не жрать батарею
