@@ -1,6 +1,6 @@
 'use strict';
 
-const CACHE_VERSION = 'qr-scanner-v1.2';
+const CACHE_VERSION = 'qr-scanner-v1.3';
 const APP_SHELL = [
     './',
     './index.html',
