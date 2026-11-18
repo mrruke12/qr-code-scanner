@@ -514,18 +514,38 @@
 
                     } else {
                         console.error('❌ Webhook вернул ошибку:', response.status);
+                        let responseBody = '';
+                        try {
+                            responseBody = await response.text();
+                        } catch (bodyError) {
+                            console.warn('Не удалось прочитать ответ сервера:', bodyError);
+                            responseBody = 'Не удалось прочитать тело ответа:\n' + getErrorDetails(bodyError);
+                        }
+
                         showPopupNotification(
-                            'Ошибка при сканировании\nСтатус: ' + response.status,
+                            'Ошибка при сканировании\n' +
+                            'Статус: ' + response.status +
+                            (response.statusText ? ' ' + response.statusText : '') +
+                            '\n\nОтвет сервера:\n' + (responseBody || '(пустой ответ)'),
                             'error'
                         );
                     }
                 } catch (err) {
                     console.error('❌ Ошибка отправки:', err);
                     showPopupNotification(
-                        'Ошибка подключения\nПроверьте интернет',
+                        'Ошибка подключения\nПроверьте интернет\n\nТекст ошибки:\n' +
+                        getErrorDetails(err),
                         'error'
                     );
                 }
+            }
+
+            function getErrorDetails(error) {
+                const details = [];
+                if (error && error.name) details.push('Тип: ' + error.name);
+                if (error && error.message) details.push('Сообщение: ' + error.message);
+                if (error && error.stack) details.push('Стек:\n' + error.stack);
+                return details.length ? details.join('\n') : String(error);
             }
             
             async function startCamera() {
@@ -697,17 +717,19 @@
                         transform: translate(-50%, -50%);
                         background: rgba(0, 0, 0, 0.95);
                         color: #fff;
-                        padding: 30px;
+                        padding: 20px;
                         border-radius: 12px;
                         text-align: center;
-                        font-size: 16px;
+                        font-size: 14px;
                         z-index: 10000;
                         border: 2px solid;
-                        max-width: 80%;
-                        max-height: 70vh;
+                        width: 90vw;
+                        max-width: 480px;
+                        max-height: 80vh;
                         overflow-y: auto;
-                        line-height: 1.5;
-                        white-space: pre-line;
+                        overflow-wrap: anywhere;
+                        line-height: 1.4;
+                        white-space: pre-wrap;
                         box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
                     `;
                     document.body.appendChild(popup);
@@ -720,22 +742,26 @@
                 } else if (type === 'error') {
                     popup.style.borderColor = '#ff4444';
                     popup.style.color = '#ff4444';
+                    popup.style.textAlign = 'left';
                 } else {
                     popup.style.borderColor = '#00a8ff';
                     popup.style.color = '#00a8ff';
+                }
+                if (type !== 'error') {
+                    popup.style.textAlign = 'center';
                 }
 
                 popup.textContent = message;
                 popup.style.display = 'block';
 
-                // Плашка показывается 10 секунд либо до следующего ответа сервера
+                // Ошибку оставляем дольше, чтобы успеть прочитать детали.
                 if (popupHideTimer) {
                     clearTimeout(popupHideTimer);
                 }
                 popupHideTimer = setTimeout(() => {
                     popup.style.display = 'none';
                     popupHideTimer = null;
-                }, 10000);
+                }, type === 'error' ? 30000 : 10000);
             }
         })();
 
